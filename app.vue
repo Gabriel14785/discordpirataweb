@@ -11,12 +11,10 @@ const connected = ref(false);
 const setupMissing = ref(false);
 const connectionError = ref('');
 const sharing = ref(false);
-const muted = ref(false);
 const left = ref(false);
 const previewVideo = ref<HTMLVideoElement>();
 const channel = ref<RealtimeChannel>();
 const stream = ref<MediaStream>();
-const micStream = ref<MediaStream>();
 const peers = new Map<string, RTCPeerConnection>();
 const members = ref<{ id: string; animal: string; room: string }[]>([]);
 const roomMembers = ref<Record<string, { id: string; animal: string; room: string }[]>>({});
@@ -46,10 +44,8 @@ function connect(peer: string, offer: boolean) {
   const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
   peers.set(peer, pc);
 
-  // Add all tracks from screen share stream
+  // Add all tracks from screen share stream (video + game audio only)
   stream.value?.getTracks().forEach(track => pc.addTrack(track, stream.value!));
-  // Add mic tracks if available
-  micStream.value?.getTracks().forEach(track => pc.addTrack(track, micStream.value!));
 
   pc.onicecandidate = event => event.candidate && send(peer, { candidate: event.candidate });
   pc.ontrack = event => {
@@ -112,30 +108,6 @@ function stopSharing() {
   sharing.value = false;
 }
 
-// Mic mute/unmute
-async function toggleMic() {
-  if (muted.value) {
-    // Unmute: get mic stream
-    try {
-      micStream.value = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Add to all peers + renegotiate
-      peers.forEach(async (pc, peer) => {
-        micStream.value!.getTracks().forEach(track => pc.addTrack(track, micStream.value!));
-        await pc.setLocalDescription(await pc.createOffer());
-        send(peer, { description: pc.localDescription });
-      });
-      muted.value = false;
-    } catch {
-      alert('Nao foi possivel acessar o microfone.');
-    }
-  } else {
-    // Mute: stop mic tracks
-    micStream.value?.getTracks().forEach(track => track.stop());
-    micStream.value = undefined;
-    muted.value = true;
-  }
-}
-
 // Leave room / rejoin
 function leaveRoom() {
   left.value = true;
@@ -145,9 +117,6 @@ function leaveRoom() {
   peers.clear();
   remoteStreams.value = new Map();
   members.value = [];
-  micStream.value?.getTracks().forEach(track => track.stop());
-  micStream.value = undefined;
-  muted.value = false;
 }
 
 function rejoinRoom() {
@@ -216,7 +185,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopSharing();
-  micStream.value?.getTracks().forEach(track => track.stop());
   peers.forEach(peer => peer.close());
   channel.value?.unsubscribe();
 });
@@ -353,9 +321,6 @@ async function switchRoom(name: string) {
           <button class="control-btn" :class="{ active: sharing }" @click="sharing ? stopSharing() : startSharing()">
             {{ sharing ? '⏹ Tela' : '🖥 Tela' }}
           </button>
-          <button class="control-btn" :class="{ muted: muted }" @click="toggleMic">
-            {{ muted ? '🔇 Mic' : '🎙 Mic' }}
-          </button>
           <button class="control-btn leave" @click="leaveRoom">
             📞 Sair
           </button>
@@ -400,7 +365,6 @@ async function switchRoom(name: string) {
 .control-btn { padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card2); color: var(--text); font-size: 13px; cursor: pointer; transition: all 0.15s; }
 .control-btn:hover { background: var(--purple); border-color: var(--purple); }
 .control-btn.active { background: var(--green); border-color: var(--green); color: #000; }
-.control-btn.muted { background: #ef4444; border-color: #ef4444; color: #fff; }
 .control-btn.leave { background: transparent; border-color: #ef4444; color: #ef4444; }
 .control-btn.leave:hover { background: #ef4444; color: #fff; }
 </style>
