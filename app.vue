@@ -153,6 +153,14 @@ function focusPeer(peerId: string) {
   focusedPeer.value = focusedPeer.value === peerId ? null : peerId;
 }
 
+function toggleFullscreen(el: HTMLElement) {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    el.requestFullscreen();
+  }
+}
+
 // Lifecycle
 onMounted(() => {
   if (!config.public.supabaseUrl || !config.public.supabaseAnonKey) {
@@ -313,18 +321,18 @@ async function switchRoom(name: string) {
           <video v-show="sharing" ref="previewVideo" autoplay muted playsinline />
 
           <!-- Focused remote stream (big) -->
-          <video
-            v-if="focusedPeer && remoteStreams.has(focusedPeer)"
-            :ref="el => {
-              if (el) (el as HTMLVideoElement).srcObject = remoteStreams.get(focusedPeer!)!
-            }"
-            autoplay
-            playsinline
-            class="focused-video"
-          />
-          <span v-if="focusedPeer && remoteStreams.has(focusedPeer)" class="focused-label">
-            {{ members.find(m => m.id === focusedPeer)?.animal || 'Desconhecido' }}
-          </span>
+          <div v-if="focusedPeer && remoteStreams.has(focusedPeer)" class="focused-wrap">
+            <video
+              :ref="el => {
+                if (el) (el as HTMLVideoElement).srcObject = remoteStreams.get(focusedPeer!)!
+              }"
+              autoplay
+              playsinline
+              class="focused-video"
+            />
+            <span class="focused-label">{{ members.find(m => m.id === focusedPeer)?.animal || 'Desconhecido' }}</span>
+            <button class="fs-btn" @click="toggleFullscreen(($event.target as HTMLElement).parentElement!)">⛶</button>
+          </div>
 
           <!-- Thumbnail strip -->
           <div v-if="remoteStreams.size > 1" class="thumb-strip">
@@ -357,9 +365,9 @@ async function switchRoom(name: string) {
                 autoplay
                 playsinline
                 class="remote-video"
-                @click="focusPeer(peerId)"
               />
               <span class="remote-label">{{ members.find(m => m.id === peerId)?.animal || 'Desconhecido' }}</span>
+              <button class="fs-btn" @click.stop="toggleFullscreen(($event.target as HTMLElement).closest('.remote-tile')!)">⛶</button>
             </div>
           </div>
 
@@ -417,8 +425,14 @@ async function switchRoom(name: string) {
 .remote-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); padding: 3px 10px; border-radius: 5px; font-size: 12px; color: #fff; }
 
 /* Focused stream */
+.focused-wrap { position: relative; width: 100%; height: 100%; }
 .focused-video { width: 100%; height: 100%; object-fit: contain; }
 .focused-label { position: absolute; bottom: 12px; left: 12px; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px; font-size: 13px; color: #fff; }
+
+/* Fullscreen button */
+.fs-btn { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border: 0; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; cursor: pointer; display: grid; place-items: center; opacity: 0; transition: opacity 0.15s; }
+.focused-wrap:hover .fs-btn, .remote-tile:hover .fs-btn { opacity: 1; }
+.fs-btn:hover { background: var(--purple); }
 
 /* Thumbnail strip */
 .thumb-strip { display: flex; gap: 8px; padding: 8px 12px; width: 100%; overflow-x: auto; }
