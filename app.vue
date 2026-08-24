@@ -22,6 +22,7 @@ const members = ref<{ id: string; animal: string }[]>([]);
 const roomMembers = ref<Record<string, { id: string; animal: string }[]>>({});
 const channels = new Map<string, RealtimeChannel>();
 let id = '';
+let userId = '';
 const animals = ['Raposa', 'Lobo', 'Urso', 'Panda', 'Tigre', 'Leão', 'Coala', 'Coruja', 'Gato', 'Cervo', 'Lontra', 'Macaco'];
 const animal = ref(animals[Math.floor(Math.random() * animals.length)]);
 
@@ -75,19 +76,21 @@ async function copyInvite() { await navigator.clipboard?.writeText(`${location.o
 onMounted(() => {
   if (!config.public.supabaseUrl || !config.public.supabaseAnonKey) { setupMissing.value = true; return; }
   supabase = createClient(config.public.supabaseUrl, config.public.supabaseAnonKey);
-  id = crypto.randomUUID();
+  userId = crypto.randomUUID();
   rooms.forEach(name => setupRoom(name));
 });
 onBeforeUnmount(() => { stopSharing(); peers.forEach(peer => peer.close()); channels.forEach(current => current.unsubscribe()); });
 
 function setupRoom(name: string) {
-  const current = supabase.channel(`room:${name.toUpperCase()}`, { config: { broadcast: { self: false }, presence: { key: id } } });
+  const roomId = `${userId}:${name.toUpperCase()}`;
+  const current = supabase.channel(`room:${name.toUpperCase()}`, { config: { broadcast: { self: false }, presence: { key: roomId } } });
   channels.set(name, current);
-  current.on('broadcast', { event: 'signal' }, async ({ payload }) => { if (name === currentRoom.value && payload.to === id) await signal(payload.from, payload.data); });
-  current.on('presence', { event: 'sync' }, () => { updateMembers(name, current); if (name === currentRoom.value) Object.keys(current.presenceState()).filter(peer => peer !== id).forEach(peer => connect(peer, id > peer)); });
+  if (name === currentRoom.value) id = roomId;
+  current.on('broadcast', { event: 'signal' }, async ({ payload }) => { if (name === currentRoom.value && payload.to === roomId) await signal(payload.from, payload.data); });
+  current.on('presence', { event: 'sync' }, () => { updateMembers(name, current); if (name === currentRoom.value) Object.keys(current.presenceState()).filter(peer => peer !== roomId).forEach(peer => connect(peer, roomId > peer)); });
   current.on('presence', { event: 'join' }, () => updateMembers(name, current));
   current.on('presence', { event: 'leave' }, ({ key }) => { if (name === currentRoom.value) { peers.get(key)?.close(); peers.delete(key); } updateMembers(name, current); });
-  current.subscribe(async status => { if (status === 'SUBSCRIBED') { if (name === currentRoom.value) { channel.value = current; connected.value = true; connectionError.value = ''; await current.track({ animal: animal.value }); } updateMembers(name, current); } else if (name === currentRoom.value && ['CHANNEL_ERROR', 'TIMED_OUT'].includes(status)) { connectionError.value = status; } });
+  current.subscribe(async (status, error) => { if (status === 'SUBSCRIBED') { if (name === currentRoom.value) { channel.value = current; connected.value = true; connectionError.value = ''; await current.track({ animal: animal.value }); } updateMembers(name, current); } else if (name === currentRoom.value && ['CHANNEL_ERROR', 'TIMED_OUT'].includes(status)) { console.error('Supabase Realtime:', status, error); connectionError.value = `${status}${error?.message ? `: ${error.message}` : ''}`; } });
 }
 
 async function switchRoom(name: string) {
