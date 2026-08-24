@@ -76,7 +76,6 @@ async function copyInvite() { await navigator.clipboard?.writeText(`${location.o
 onMounted(() => {
   if (!config.public.supabaseUrl || !config.public.supabaseAnonKey) { setupMissing.value = true; return; }
   supabase = createClient(config.public.supabaseUrl, config.public.supabaseAnonKey);
-  supabase.realtime.setAuth(config.public.supabaseAnonKey);
   userId = crypto.randomUUID();
   const current = supabase.channel('playroom', { config: { broadcast: { self: false }, presence: { key: userId } } });
   channel.value = current;
