@@ -23,7 +23,7 @@ const roomMembers = ref<Record<string, { id: string; animal: string }[]>>({});
 let id = '';
 let userId = '';
 const animals = ['Raposa', 'Lobo', 'Urso', 'Panda', 'Tigre', 'Leão', 'Coala', 'Coruja', 'Gato', 'Cervo', 'Lontra', 'Macaco'];
-const animal = ref(animals[Math.floor(Math.random() * animals.length)]);
+const animal = ref('Animal');
 
 function send(to: string, data: unknown) { channel.value?.send({ type: 'broadcast', event: 'signal', payload: { to, from: id, room: currentRoom.value.toUpperCase(), data } }); }
 function updateMembers(current: RealtimeChannel) {
@@ -77,6 +77,7 @@ onMounted(() => {
   if (!config.public.supabaseUrl || !config.public.supabaseAnonKey) { setupMissing.value = true; return; }
   supabase = createClient(config.public.supabaseUrl, config.public.supabaseAnonKey);
   userId = crypto.randomUUID();
+  animal.value = animals[Math.floor(Math.random() * animals.length)];
   const current = supabase.channel('playroom', { config: { broadcast: { self: false }, presence: { key: userId } } });
   channel.value = current;
   current.on('broadcast', { event: 'signal' }, async ({ payload }) => { if (payload.room === currentRoom.value.toUpperCase() && payload.to === id) await signal(payload.from, payload.data); });
