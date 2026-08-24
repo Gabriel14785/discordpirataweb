@@ -20,18 +20,18 @@ const stream = ref<MediaStream>();
 const peers = new Map<string, RTCPeerConnection>();
 const members = ref<{ id: string; animal: string }[]>([]);
 const roomMembers = ref<Record<string, { id: string; animal: string }[]>>({});
-const channels = new Map<string, RealtimeChannel>();
 let id = '';
 let userId = '';
 const animals = ['Raposa', 'Lobo', 'Urso', 'Panda', 'Tigre', 'Leão', 'Coala', 'Coruja', 'Gato', 'Cervo', 'Lontra', 'Macaco'];
 const animal = ref(animals[Math.floor(Math.random() * animals.length)]);
 
-function send(to: string, data: unknown) { channel.value?.send({ type: 'broadcast', event: 'signal', payload: { to, from: id, data } }); }
-function updateMembers(name: string, current: RealtimeChannel) {
+function send(to: string, data: unknown) { channel.value?.send({ type: 'broadcast', event: 'signal', payload: { to, from: id, room: currentRoom.value.toUpperCase(), data } }); }
+function updateMembers(current: RealtimeChannel) {
   const state = current.presenceState<{ animal: string }>();
-  const list = Object.entries(state).map(([memberId, values]) => ({ id: memberId, animal: values[0]?.animal || 'Animal' }));
-  roomMembers.value = { ...roomMembers.value, [name]: list };
-  if (name === currentRoom.value) { members.value = list; participantCount.value = list.length || 1; }
+  const all = Object.entries(state).map(([memberId, values]) => ({ id: memberId, animal: values[0]?.animal || 'Animal', room: values[0]?.room }));
+  roomMembers.value = Object.fromEntries(rooms.map(name => [name, all.filter(member => member.room === name.toUpperCase())]));
+  members.value = roomMembers.value[currentRoom.value] || [];
+  participantCount.value = members.value.length || 1;
 }
 
 function connect(peer: string, offer: boolean) {
@@ -41,9 +41,9 @@ function connect(peer: string, offer: boolean) {
   stream.value?.getTracks().forEach(track => pc.addTrack(track, stream.value!));
   pc.onicecandidate = event => event.candidate && send(peer, { candidate: event.candidate });
   pc.ontrack = event => { if (remoteVideo.value) { remoteVideo.value.srcObject = event.streams[0]; remoteVideo.value.style.display = 'block'; hasRemoteStream.value = true; } };
-  pc.onconnectionstatechange = () => { if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) { peers.delete(peer); updateMembers(room.value, channel.value!); } };
+  pc.onconnectionstatechange = () => { if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) { peers.delete(peer); updateMembers(channel.value!); } };
   if (offer) pc.createOffer().then(description => pc.setLocalDescription(description).then(() => send(peer, { description: pc.localDescription })));
-  updateMembers(room.value, channel.value!);
+  updateMembers(channel.value!);
   return pc;
 }
 
@@ -77,29 +77,23 @@ onMounted(() => {
   if (!config.public.supabaseUrl || !config.public.supabaseAnonKey) { setupMissing.value = true; return; }
   supabase = createClient(config.public.supabaseUrl, config.public.supabaseAnonKey);
   userId = crypto.randomUUID();
-  rooms.forEach(name => setupRoom(name));
+  const current = supabase.channel('playroom', { config: { broadcast: { self: false }, presence: { key: userId } } });
+  channel.value = current;
+  current.on('broadcast', { event: 'signal' }, async ({ payload }) => { if (payload.room === currentRoom.value.toUpperCase() && payload.to === id) await signal(payload.from, payload.data); });
+  current.on('presence', { event: 'sync' }, () => { updateMembers(current); Object.keys(current.presenceState<{ room: string }>()).filter(peer => peer !== id && current.presenceState<{ room: string }>()[peer]?.[0]?.room === currentRoom.value.toUpperCase()).forEach(peer => connect(peer, id > peer)); });
+  current.on('presence', { event: 'join' }, () => updateMembers(current));
+  current.on('presence', { event: 'leave' }, ({ key }) => { peers.get(key)?.close(); peers.delete(key); updateMembers(current); });
+  current.subscribe(async (status, error) => { if (status === 'SUBSCRIBED') { connected.value = true; connectionError.value = ''; id = userId; await current.track({ animal: animal.value, room: currentRoom.value.toUpperCase() }); updateMembers(current); } else if (['CHANNEL_ERROR', 'TIMED_OUT'].includes(status)) { console.error('Supabase Realtime:', status, error); connectionError.value = `${status}${error?.message ? `: ${error.message}` : ''}`; } });
 });
-onBeforeUnmount(() => { stopSharing(); peers.forEach(peer => peer.close()); channels.forEach(current => current.unsubscribe()); });
-
-function setupRoom(name: string) {
-  const roomId = `${userId}:${name.toUpperCase()}`;
-  const current = supabase.channel(`room:${name.toUpperCase()}`, { config: { broadcast: { self: false }, presence: { key: roomId } } });
-  channels.set(name, current);
-  if (name === currentRoom.value) id = roomId;
-  current.on('broadcast', { event: 'signal' }, async ({ payload }) => { if (name === currentRoom.value && payload.to === roomId) await signal(payload.from, payload.data); });
-  current.on('presence', { event: 'sync' }, () => { updateMembers(name, current); if (name === currentRoom.value) Object.keys(current.presenceState()).filter(peer => peer !== roomId).forEach(peer => connect(peer, roomId > peer)); });
-  current.on('presence', { event: 'join' }, () => updateMembers(name, current));
-  current.on('presence', { event: 'leave' }, ({ key }) => { if (name === currentRoom.value) { peers.get(key)?.close(); peers.delete(key); } updateMembers(name, current); });
-  current.subscribe(async (status, error) => { if (status === 'SUBSCRIBED') { if (name === currentRoom.value) { channel.value = current; connected.value = true; connectionError.value = ''; await current.track({ animal: animal.value }); } updateMembers(name, current); } else if (name === currentRoom.value && ['CHANNEL_ERROR', 'TIMED_OUT'].includes(status)) { console.error('Supabase Realtime:', status, error); connectionError.value = `${status}${error?.message ? `: ${error.message}` : ''}`; } });
-}
+onBeforeUnmount(() => { stopSharing(); peers.forEach(peer => peer.close()); channel.value?.unsubscribe(); });
 
 async function switchRoom(name: string) {
   if (name === currentRoom.value) return;
   stopSharing(); hasRemoteStream.value = false; if (remoteVideo.value) remoteVideo.value.srcObject = null; peers.forEach(peer => peer.close()); peers.clear(); await channel.value?.untrack(); members.value = [];
   currentRoom.value = name;
   await navigateTo({ query: { room: name } }, { replace: true });
-  channel.value = channels.get(name);
-  if (channel.value) { await channel.value.track({ animal: animal.value }); updateMembers(name, channel.value); }
+  id = userId;
+  if (channel.value) { await channel.value.track({ animal: animal.value, room: name.toUpperCase() }); updateMembers(channel.value); }
 }
 </script>
 
