@@ -139,9 +139,11 @@ function leaveRoom() {
 
 function rejoinRoom() {
   left.value = false;
+  id = userId;
+  focusedPeer.value = null;
   if (channel.value) {
     channel.value.track({ animal: animal.value, room: currentRoom.value.toUpperCase() });
-    id = userId;
+    updateMembers(channel.value);
   }
 }
 
@@ -176,7 +178,7 @@ onMounted(() => {
   channel.value = current;
 
   current.on('broadcast', { event: 'signal' }, async ({ payload }) => {
-    if (payload.room === currentRoom.value.toUpperCase() && payload.to === id) {
+    if (!left.value && payload.room === currentRoom.value.toUpperCase() && payload.to === id) {
       await signal(payload.from, payload.data);
     }
   });
@@ -186,7 +188,9 @@ onMounted(() => {
     const state = current.presenceState<{ room: string }>();
     Object.keys(state)
       .filter(peer => peer !== id && state[peer]?.[0]?.room === currentRoom.value.toUpperCase())
-      .forEach(peer => connect(peer, id > peer));
+      .forEach(peer => {
+        if (!peers.has(peer)) connect(peer, id > peer);
+      });
   });
 
   current.on('presence', { event: 'join' }, () => updateMembers(current));
