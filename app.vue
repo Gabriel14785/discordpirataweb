@@ -172,9 +172,10 @@ function focusPeer(peerId: string) {
   focusedPeer.value = focusedPeer.value === peerId ? null : peerId;
 }
 
-function toggleFullscreen(el: HTMLElement) {
+function toggleFullscreen(wrap: HTMLElement) {
+  const target = wrap.querySelector('video') || wrap;
   if (document.fullscreenElement) document.exitFullscreen();
-  else el.requestFullscreen();
+  else target.requestFullscreen();
 }
 
 onMounted(() => {
@@ -417,11 +418,6 @@ async function switchRoom(name: string) {
 .focused-wrap { position: relative; width: 100%; height: 100%; background: #000; }
 .focused-video { width: 100%; height: 100%; object-fit: contain; }
 .focused-label { position: absolute; bottom: 12px; left: 12px; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px; font-size: 13px; color: #fff; }
-
-.focused-wrap:fullscreen, .focused-wrap:-webkit-full-screen { display: flex; align-items: center; justify-content: center; background: #000; }
-.focused-wrap:fullscreen .focused-video, .focused-wrap:-webkit-full-screen .focused-video { width: 100vw; height: 100vh; object-fit: contain; }
-.remote-tile:fullscreen, .remote-tile:-webkit-full-screen { display: flex; align-items: center; justify-content: center; background: #000; aspect-ratio: auto; }
-.remote-tile:fullscreen .remote-video, .remote-tile:-webkit-full-screen .remote-video { width: 100vw; height: 100vh; object-fit: contain; }
 
 .fs-btn { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border: 0; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; cursor: pointer; display: grid; place-items: center; opacity: 0; transition: opacity 0.15s; z-index: 1; }
 .focused-wrap:hover .fs-btn, .remote-tile:hover .fs-btn { opacity: 1; }
