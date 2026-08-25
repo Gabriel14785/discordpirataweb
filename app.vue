@@ -40,6 +40,20 @@ function updateMembers(current: RealtimeChannel) {
   members.value = roomMembers.value[currentRoom.value] || [];
 }
 
+function bindAllVideos() {
+  nextTick(() => {
+    document.querySelectorAll<HTMLElement>('[data-peer]').forEach(el => {
+      const peerId = el.dataset.peer!;
+      const s = remoteStreams.value.get(peerId);
+      const video = el.querySelector('video');
+      if (video && s && video.srcObject !== s) video.srcObject = s;
+    });
+  });
+}
+
+watch(remoteStreams, () => bindAllVideos(), { deep: true });
+watch(focusedPeer, () => bindAllVideos());
+
 function addStreamToPeer(pc: RTCPeerConnection) {
   if (!stream.value) return;
   const senders = pc.getSenders().filter(s => s.track?.kind === 'video');
@@ -59,14 +73,15 @@ function connect(peer: string, offer: boolean) {
   const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
   peers.set(peer, pc);
 
-  // Add screen tracks if already sharing
   addStreamToPeer(pc);
 
   pc.onicecandidate = event => event.candidate && send(peer, { candidate: event.candidate });
   pc.ontrack = event => {
     const peerStream = event.streams[0];
     if (peerStream) {
-      remoteStreams.value = new Map(remoteStreams.value.set(peer, peerStream));
+      const next = new Map(remoteStreams.value);
+      next.set(peer, peerStream);
+      remoteStreams.value = next;
       if (!focusedPeer.value) focusedPeer.value = peer;
     }
   };
@@ -100,14 +115,12 @@ async function signal(peer: string, data: any) {
   }
 }
 
-// Screen sharing
 async function startSharing() {
   if (!navigator.mediaDevices?.getDisplayMedia) return alert('Use Chrome, Edge ou Firefox para transmitir a tela.');
   try {
     stream.value = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
     if (previewVideo.value) previewVideo.value.srcObject = stream.value;
     sharing.value = true;
-    // Replace/add tracks on all existing peers + renegotiate
     peers.forEach(async (pc, peer) => {
       addStreamToPeer(pc);
       await pc.setLocalDescription(await pc.createOffer());
@@ -126,7 +139,6 @@ function stopSharing() {
   focusedPeer.value = null;
 }
 
-// Leave room / rejoin
 function leaveRoom() {
   left.value = true;
   stopSharing();
@@ -137,13 +149,18 @@ function leaveRoom() {
   members.value = [];
 }
 
-function rejoinRoom() {
+async function rejoinRoom() {
   left.value = false;
   id = userId;
   focusedPeer.value = null;
   if (channel.value) {
-    channel.value.track({ animal: animal.value, room: currentRoom.value.toUpperCase() });
+    await channel.value.track({ animal: animal.value, room: currentRoom.value.toUpperCase() });
     updateMembers(channel.value);
+    // Force reconnect with all peers in the room
+    const state = channel.value.presenceState<{ room: string }>();
+    Object.keys(state)
+      .filter(peer => peer !== id && state[peer]?.[0]?.room === currentRoom.value.toUpperCase())
+      .forEach(peer => connect(peer, id > peer));
   }
 }
 
@@ -156,14 +173,10 @@ function focusPeer(peerId: string) {
 }
 
 function toggleFullscreen(el: HTMLElement) {
-  if (document.fullscreenElement) {
-    document.exitFullscreen();
-  } else {
-    el.requestFullscreen();
-  }
+  if (document.fullscreenElement) document.exitFullscreen();
+  else el.requestFullscreen();
 }
 
-// Lifecycle
 onMounted(() => {
   if (!config.public.supabaseUrl || !config.public.supabaseAnonKey) {
     setupMissing.value = true;
@@ -303,7 +316,6 @@ async function switchRoom(name: string) {
         <span>Adicione <code>NUXT_PUBLIC_SUPABASE_URL</code> e <code>NUXT_PUBLIC_SUPABASE_ANON_KEY</code> nas variáveis da Vercel e faça um novo deploy.</span>
       </div>
 
-      <!-- Left state -->
       <div v-if="left" class="left-state">
         <div class="screen-icon">◖</div>
         <p>Você saiu da sala <strong>{{ currentRoom }}</strong></p>
@@ -324,52 +336,29 @@ async function switchRoom(name: string) {
         <div class="screen">
           <video v-show="sharing" ref="previewVideo" autoplay muted playsinline />
 
-          <!-- Focused remote stream (big) -->
-          <div v-if="focusedPeer && remoteStreams.has(focusedPeer)" class="focused-wrap">
-            <video
-              :ref="el => {
-                if (el) (el as HTMLVideoElement).srcObject = remoteStreams.get(focusedPeer!)!
-              }"
-              autoplay
-              playsinline
-              class="focused-video"
-            />
+          <div v-if="focusedPeer && remoteStreams.has(focusedPeer)" class="focused-wrap" :data-peer="focusedPeer">
+            <video autoplay playsinline class="focused-video" />
             <span class="focused-label">{{ members.find(m => m.id === focusedPeer)?.animal || 'Desconhecido' }}</span>
             <button class="fs-btn" @click="toggleFullscreen(($event.target as HTMLElement).parentElement!)">⛶</button>
           </div>
 
-          <!-- Thumbnail strip -->
           <div v-if="remoteStreams.size > 1" class="thumb-strip">
             <div
-              v-for="[peerId, peerStream] in remoteStreams"
+              v-for="[peerId] in remoteStreams"
               :key="peerId"
               class="thumb-tile"
               :class="{ active: focusedPeer === peerId }"
+              :data-peer="peerId"
               @click="focusPeer(peerId)"
             >
-              <video
-                :ref="el => {
-                  if (el) (el as HTMLVideoElement).srcObject = peerStream
-                }"
-                autoplay
-                playsinline
-                class="thumb-video"
-              />
+              <video autoplay playsinline class="thumb-video" />
               <span class="thumb-label">{{ members.find(m => m.id === peerId)?.animal || '?' }}</span>
             </div>
           </div>
 
-          <!-- Single remote (no focus needed) -->
           <div v-if="remoteStreams.size === 1 && !focusedPeer" class="remote-grid">
-            <div v-for="[peerId, peerStream] in remoteStreams" :key="peerId" class="remote-tile">
-              <video
-                :ref="el => {
-                  if (el) (el as HTMLVideoElement).srcObject = peerStream
-                }"
-                autoplay
-                playsinline
-                class="remote-video"
-              />
+            <div v-for="[peerId] in remoteStreams" :key="peerId" class="remote-tile" :data-peer="peerId">
+              <video autoplay playsinline class="remote-video" />
               <span class="remote-label">{{ members.find(m => m.id === peerId)?.animal || 'Desconhecido' }}</span>
               <button class="fs-btn" @click.stop="toggleFullscreen(($event.target as HTMLElement).closest('.remote-tile')!)">⛶</button>
             </div>
@@ -383,7 +372,6 @@ async function switchRoom(name: string) {
           <button v-if="sharing" class="stop" @click="stopSharing">Parar transmissão</button>
         </div>
 
-        <!-- Controls -->
         <div class="controls">
           <button class="control-btn" :class="{ active: sharing }" @click="sharing ? stopSharing() : startSharing()">
             {{ sharing ? '⏹ Tela' : '🖥 Tela' }}
@@ -415,43 +403,36 @@ async function switchRoom(name: string) {
 .room-member { display: flex; align-items: center; gap: 7px; padding: 4px 0; }
 .member-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
 
-/* Left state */
 .left-state { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 48px 0; }
 .left-state .screen-icon { font-size: 48px; opacity: 0.4; }
 .left-state p { color: var(--muted); font-size: 14px; }
 .left-state .primary { margin-top: 8px; }
 
-/* Remote streams grid */
 .remote-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; width: 100%; padding: 12px; }
 .remote-tile { position: relative; background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16/9; cursor: pointer; }
 .remote-tile:hover { outline: 2px solid var(--purple); }
 .remote-video { width: 100%; height: 100%; object-fit: contain; }
 .remote-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); padding: 3px 10px; border-radius: 5px; font-size: 12px; color: #fff; }
 
-/* Focused stream */
 .focused-wrap { position: relative; width: 100%; height: 100%; background: #000; }
 .focused-video { width: 100%; height: 100%; object-fit: contain; }
 .focused-label { position: absolute; bottom: 12px; left: 12px; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 6px; font-size: 13px; color: #fff; }
 
-/* Fullscreen */
 .focused-wrap:fullscreen, .focused-wrap:-webkit-full-screen { display: flex; align-items: center; justify-content: center; background: #000; }
 .focused-wrap:fullscreen .focused-video, .focused-wrap:-webkit-full-screen .focused-video { width: 100vw; height: 100vh; object-fit: contain; }
 .remote-tile:fullscreen, .remote-tile:-webkit-full-screen { display: flex; align-items: center; justify-content: center; background: #000; aspect-ratio: auto; }
 .remote-tile:fullscreen .remote-video, .remote-tile:-webkit-full-screen .remote-video { width: 100vw; height: 100vh; object-fit: contain; }
 
-/* Fullscreen button */
-.fs-btn { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border: 0; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; cursor: pointer; display: grid; place-items: center; opacity: 0; transition: opacity 0.15s; }
+.fs-btn { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border: 0; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; font-size: 16px; cursor: pointer; display: grid; place-items: center; opacity: 0; transition: opacity 0.15s; z-index: 1; }
 .focused-wrap:hover .fs-btn, .remote-tile:hover .fs-btn { opacity: 1; }
 .fs-btn:hover { background: var(--purple); }
 
-/* Thumbnail strip */
 .thumb-strip { display: flex; gap: 8px; padding: 8px 12px; width: 100%; overflow-x: auto; }
 .thumb-tile { position: relative; flex: 0 0 160px; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 16/9; cursor: pointer; border: 2px solid transparent; transition: border-color 0.15s; }
 .thumb-tile:hover, .thumb-tile.active { border-color: var(--purple); }
 .thumb-video { width: 100%; height: 100%; object-fit: contain; }
 .thumb-label { position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,0.7); padding: 2px 6px; border-radius: 4px; font-size: 10px; color: #fff; }
 
-/* Controls */
 .controls { display: flex; gap: 8px; justify-content: center; padding: 12px 0; }
 .control-btn { padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card2); color: var(--text); font-size: 13px; cursor: pointer; transition: all 0.15s; }
 .control-btn:hover { background: var(--purple); border-color: var(--purple); }
